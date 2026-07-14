@@ -9,15 +9,15 @@ The same vprofile stack (DB, cache, message queue, app server, load balancer) as
                        |
                        v
               ┌─────────────────┐
-              │  nginx (LB)     │  <- only service published to the host (port 80)
+              │        LB       │  <- only service published to the host (port 80)
               └────────┬────────┘
                        |
-           ┌───────────┴───────────┐
-           v                       v
-     ┌───────────┐           ┌───────────┐
-     │   app1     │           │   app2     │   <- Tomcat, identical images
-     └─────┬──────┘           └─────┬──────┘
-           |                        |
+           ┌───────────┴───────────
+           v                       
+     ┌───────────┐           
+     │   app1     │          <- Tomcat, identical images
+     └─────┬──────┘           
+           |                       
    ┌───────┴────────────────────────┴───────┐
    v                    v                    v
 ┌──────┐          ┌────────────┐       ┌──────────┐
