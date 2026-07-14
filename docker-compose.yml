@@ -1,0 +1,204 @@
+name: vprofile
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+    internal: true   # db/cache/mq are NOT reachable from outside this network - no direct internet route, no published ports; only app1 (on the same instance) can reach them
+
+volumes:
+  db_data:
+  rmq_data:
+
+services:
+
+  # ---------------------------------------------------------------------
+  # Nginx - the only service exposed to the host. Acts as the load
+  # balancer in front of the two app instances (replaces the AWS ALB).
+  # ---------------------------------------------------------------------
+  nginx:
+    build: ./nginx
+    image: vprofile/nginx:1.0
+    ports:
+      - "80:80"
+    networks:
+      - frontend
+    depends_on:
+      app1:
+        condition: service_healthy
+      app2:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+    cap_drop: ["ALL"]
+    cap_add: ["NET_BIND_SERVICE"]  # only capability nginx actually needs, to bind port 80
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------
+  # App tier - two identical Tomcat instances, same image, no shared
+  # state (sessions handled by nginx ip_hash / sticky routing).
+  # ---------------------------------------------------------------------
+  app1:
+    build: ./app
+    image: vprofile/app:1.0
+    networks:
+      - frontend
+      - backend
+    environment:
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASS: ${DB_PASS}
+      MC_HOST: memcached
+      MC_PORT: "11211"
+      MQ_HOST: rabbitmq
+      MQ_PORT: "5672"
+      MQ_USER: ${MQ_USER}
+      MQ_PASS: ${MQ_PASS}
+    depends_on:
+      db:
+        condition: service_healthy
+      memcached:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/login"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /usr/local/tomcat/temp
+      - /usr/local/tomcat/work
+      - /usr/local/tomcat/logs
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 768m
+    restart: unless-stopped
+
+  app2:
+    build: ./app
+    image: vprofile/app:1.0
+    networks:
+      - frontend
+      - backend
+    environment:
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASS: ${DB_PASS}
+      MC_HOST: memcached
+      MC_PORT: "11211"
+      MQ_HOST: rabbitmq
+      MQ_PORT: "5672"
+      MQ_USER: ${MQ_USER}
+      MQ_PASS: ${MQ_PASS}
+    depends_on:
+      db:
+        condition: service_healthy
+      memcached:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/login"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /usr/local/tomcat/temp
+      - /usr/local/tomcat/work
+      - /usr/local/tomcat/logs
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 768m
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------
+  # Database - only reachable from the backend (internal) network.
+  # ---------------------------------------------------------------------
+  db:
+    build: ./db
+    image: vprofile/db:1.0
+    networks:
+      - backend
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASS}
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASS}
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_ROOT_PASS}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "SETUID", "SETGID", "DAC_OVERRIDE"]  # minimum caps mysqld needs
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------
+  # Memcached - stateless, no volume needed.
+  # ---------------------------------------------------------------------
+  memcached:
+    build: ./memcached
+    image: vprofile/memcached:1.0
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "echo stats | nc -w 2 localhost 11211 | grep -q uptime"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------
+  # RabbitMQ - message broker, only reachable from backend network.
+  # ---------------------------------------------------------------------
+  rabbitmq:
+    build: ./rabbitmq
+    image: vprofile/rabbitmq:1.0
+    networks:
+      - backend
+    environment:
+      RABBITMQ_DEFAULT_USER: ${MQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${MQ_PASS}
+    volumes:
+      - rmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    restart: unless-stopped
